@@ -25,6 +25,10 @@ const C = {
   usaBg: new Color("#0f0900"),
 }
 
+const NOTIFY_MINUTES_BEFORE = 5
+const NOTIFY_LOOKAHEAD_DAYS = 7
+const NOTIFY_STATE_KEY = "wc2026-notify-state-v1"
+
 // ── FULL SCHEDULE (UTC kickoff times) ────────────────────────
 // Fields: grp, t1, t2, um (UTC month), ud (UTC day),
 //         uh (UTC hour 0-23), un (UTC minute, default 0), v (venue), usa?
@@ -196,6 +200,71 @@ function keyToLabel(key) {
 // Stage label for badge
 function badgeLabel(grp) {
   return {R32:"Rd 32",R16:"Rd 16",QF:"QF",SF:"SF","3RD":"3rd Pl","FIN":"FINAL"}[grp]||("Grp "+grp)
+}
+
+function gameId(g) {
+  return [g.um,g.ud,g.uh,g.un||0,g.t1,g.t2].join("|")
+}
+
+function loadNotifyState() {
+  if(!Keychain.contains(NOTIFY_STATE_KEY)) return {}
+  try {
+    const raw = Keychain.get(NOTIFY_STATE_KEY)
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch (_) {
+    return {}
+  }
+}
+
+function saveNotifyState(state) {
+  Keychain.set(NOTIFY_STATE_KEY, JSON.stringify(state))
+}
+
+async function scheduleKickoffNotifications() {
+  const now = Date.now()
+  const lookaheadMs = NOTIFY_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000
+  const latestKickoff = now + lookaheadMs
+  const triggerOffsetMs = NOTIFY_MINUTES_BEFORE * 60 * 1000
+
+  const state = loadNotifyState()
+
+  // Remove stale entries so old games don't keep the state growing.
+  for(const id of Object.keys(state)) {
+    if(Number(state[id]) < now - 60 * 60 * 1000) delete state[id]
+  }
+
+  const upcoming = GAMES
+    .filter(g => {
+      const ko = kickoffDate(g).getTime()
+      const trigger = ko - triggerOffsetMs
+      return ko <= latestKickoff && trigger > now
+    })
+    .sort((a,b) => kickoffDate(a) - kickoffDate(b))
+
+  for(const g of upcoming) {
+    const ko = kickoffDate(g).getTime()
+    const triggerMs = ko - triggerOffsetMs
+    const id = gameId(g)
+
+    if(Number(state[id]) === triggerMs) continue
+
+    try {
+      const n = new Notification()
+      n.title = "World Cup 2026"
+      n.subtitle = g.t1 + " vs " + g.t2
+      n.body = "Starts at " + displayTime(g) + " in 5 minutes"
+      n.threadIdentifier = "worldcup2026"
+      n.openURL = "scriptable:///run?scriptName=" + encodeURIComponent(Script.name())
+      n.setTriggerDate(new Date(triggerMs))
+      await n.schedule()
+      state[id] = triggerMs
+    } catch (e) {
+      console.error("Notification schedule failed: " + e.message)
+    }
+  }
+
+  saveNotifyState(state)
 }
 
 // Normalize ESPN team names → canonical for matching
@@ -648,6 +717,8 @@ render();
 }
 
 // ── MAIN ──────────────────────────────────────────────────────
+await scheduleKickoffNotifications()
+
 if(config.runsInWidget){
   const w=await buildWidget(); Script.setWidget(w)
 } else {

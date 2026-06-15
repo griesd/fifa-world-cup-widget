@@ -28,6 +28,7 @@ const C = {
 const NOTIFY_MINUTES_BEFORE = 5
 const NOTIFY_LOOKAHEAD_DAYS = 7
 const NOTIFY_STATE_KEY = "wc2026-notify-state-v1"
+const NOTIFY_SOUND = "event"
 
 // ── FULL SCHEDULE (UTC kickoff times) ────────────────────────
 // Fields: grp, t1, t2, um (UTC month), ud (UTC day),
@@ -253,7 +254,9 @@ async function scheduleKickoffNotifications() {
       const n = new Notification()
       n.title = "World Cup 2026"
       n.subtitle = g.t1 + " vs " + g.t2
-      n.body = "Starts at " + displayTime(g) + " in 5 minutes"
+      n.body = "Starts at " + displayTime(g) + " in " + NOTIFY_MINUTES_BEFORE + " minutes"
+      // Scriptable notifications are silent by default; set a sound so iOS can play sound/vibration.
+      n.sound = NOTIFY_SOUND
       n.threadIdentifier = "worldcup2026"
       n.openURL = "scriptable:///run?scriptName=" + encodeURIComponent(Script.name())
       n.setTriggerDate(new Date(triggerMs))

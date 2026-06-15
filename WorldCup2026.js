@@ -28,6 +28,9 @@ const C = {
 const NOTIFY_MINUTES_BEFORE = 5
 const NOTIFY_LOOKAHEAD_DAYS = 7
 const NOTIFY_STATE_KEY = "wc2026-notify-state-v1"
+const FINAL_NOTIFY_STATE_KEY = "wc2026-final-notify-state-v1"
+const FINAL_NOTIFY_MIN_ELAPSED_MS = 90 * 60 * 1000
+const FINAL_NOTIFY_MAX_ELAPSED_MS = 24 * 60 * 60 * 1000
 const NOTIFY_SOUND = "event"
 
 // ── FULL SCHEDULE (UTC kickoff times) ────────────────────────
@@ -222,6 +225,21 @@ function saveNotifyState(state) {
   Keychain.set(NOTIFY_STATE_KEY, JSON.stringify(state))
 }
 
+function loadFinalNotifyState() {
+  if(!Keychain.contains(FINAL_NOTIFY_STATE_KEY)) return {}
+  try {
+    const raw = Keychain.get(FINAL_NOTIFY_STATE_KEY)
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch (_) {
+    return {}
+  }
+}
+
+function saveFinalNotifyState(state) {
+  Keychain.set(FINAL_NOTIFY_STATE_KEY, JSON.stringify(state))
+}
+
 async function scheduleKickoffNotifications() {
   const now = Date.now()
   const lookaheadMs = NOTIFY_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000
@@ -268,6 +286,47 @@ async function scheduleKickoffNotifications() {
   }
 
   saveNotifyState(state)
+}
+
+async function scheduleFinalScoreNotifications(scoreMap) {
+  const now = Date.now()
+  const state = loadFinalNotifyState()
+
+  // Prune old final-score entries after 3 days.
+  for(const id of Object.keys(state)) {
+    if(Number(state[id]) < now - 3 * 24 * 60 * 60 * 1000) delete state[id]
+  }
+
+  for(const g of GAMES) {
+    const n1 = normTeam(g.t1)
+    const n2 = normTeam(g.t2)
+    const key = [n1, n2].sort().join("|")
+    const sc = scoreMap[key]
+    if(!sc || !sc.done) continue
+
+    const elapsedMs = now - kickoffDate(g).getTime()
+    if(elapsedMs < FINAL_NOTIFY_MIN_ELAPSED_MS) continue
+    if(elapsedMs > FINAL_NOTIFY_MAX_ELAPSED_MS) continue
+
+    const id = gameId(g)
+    if(state[id]) continue
+
+    try {
+      const n = new Notification()
+      n.title = "Final Score"
+      n.subtitle = g.t1 + " " + (sc.scores[n1] || "?") + "-" + (sc.scores[n2] || "?") + " " + g.t2
+      n.body = badgeLabel(g.grp) + " • " + g.v
+      n.sound = NOTIFY_SOUND
+      n.threadIdentifier = "worldcup2026"
+      n.openURL = "scriptable:///run?scriptName=" + encodeURIComponent(Script.name())
+      await n.schedule()
+      state[id] = now
+    } catch (e) {
+      console.error("Final notification failed: " + e.message)
+    }
+  }
+
+  saveFinalNotifyState(state)
 }
 
 // Normalize ESPN team names → canonical for matching
@@ -335,9 +394,9 @@ async function fetchScores() {
       r2.timeoutInterval=5; processEvents((await r2.loadJSON()).events)
     }
   } catch(e){ console.error("ESPN: "+e.message) }
+  await scheduleFinalScoreNotifications(scoreMap)
   return scoreMap
 }
-
 // Score lookup for widget context
 function getWidgetScore(scoreMap,g) {
   const n1=normTeam(g.t1),n2=normTeam(g.t2)
